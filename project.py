@@ -10,7 +10,6 @@ import yfinance as yf
 from serpapi import GoogleSearch
 from openai import OpenAI
 
-# ────────────────────────────── Config & keys ───────────────────────────── #
 load_dotenv()
 
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
@@ -28,6 +27,8 @@ GPT_MODEL = "gpt-4.1-nano"
 SYSTEM_PROMPT = (
     "You are a helpful, concise financial assistant. "
     "Base every answer strictly on the supplied text; never invent facts."
+    "Keep all responses proffesional, impersonal, and analytical"
+    "You should be evaluating facts solely on their financial impact. Yoy may consider social, economic, and other impacts, but at the end of the day consider only how they will impact markets or specific comoddities."
 )
 
 # GPT pricing (USD per million tokens)
@@ -47,14 +48,14 @@ GENERIC_TOKENS = {
 
 PAYWALL_TAGS  = [".paywall",".subscription-wall","#gateway-content",".meteredContent"]
 PAYWALL_CACHE = "domain_status.json"
-NAME_CACHE    = "ticker_names.json"           # ticker → company name
+NAME_CACHE    = "ticker_names.json"
 
 PROMPTS = {
     # news
-    "market_blurb"  : "Summarise the following news article in exactly two sentences.",
-    "company_blurb" : "Summarise the following news article in exactly two sentences, focusing on company‑specific impacts.",
-    "market_synth"  : "Using ONLY the bullet points below, write a 2–3 sentence overview of the main themes for this industry.",
-    "company_synth" : "Using ONLY the bullet points below, write a 2–3 sentence overview of the main company‑specific themes.",
+    "market_blurb"  : "Summarise the following news article in 2 to 3 sentences. Keep information relevant to the now and the most recent and urgemt events. Stay fully neutral in reporting news. The news should be analyzed through a financial lens, how markets will be impacted, how investor sentiment changes, etc.",
+    "company_blurb" : "Summarise the following news article in 2 to 3 sentences, focusing on company‑specific impacts. Your lens should be as a person looking to invest. Consider recenet events in context of their past decisions and the overall economy. Be impartial, be just as likely to conclude a company will increase in value as it is to decrease",
+    "market_synth"  : "Using ONLY the bullet points below, write a 2–3 sentence overview of the main themes for this industry. Keep them relevant to the now, not old trends. It is relevant to mention recent changes and directions.",
+    "company_synth" : "Using ONLY the bullet points below, write a 2–3 sentence overview of the main company‑specific themes. Focus on financial impact.",
     # reddit
     "reddit_terms"  : (
         "Suggest up to five short, single‑word Reddit search tokens that retail "
@@ -73,7 +74,6 @@ PROMPTS = {
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ────────────────────────────── Helpers ─────────────────────────────────── #
 def log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
@@ -100,7 +100,6 @@ def gpt(prompt: str, max_tokens: int) -> str:
     TOKENS_USED["out"] += resp.usage.completion_tokens
     return resp.choices[0].message.content.strip()
 
-# ───────────────  ticker ↔ company‑name cache (yfinance fallback) ────────── #
 def load_name_cache() -> dict:
     try: return json.load(open(NAME_CACHE))
     except Exception: return {}
@@ -123,16 +122,22 @@ def company_name(ticker: str) -> str:
     save_name_cache(cache)
     return name
 
-# ─────────────────────────── Google‑News helpers ────────────────────────── #
-def google_news(query: str, n: int) -> list[dict]:
+def google_news(query: str, n: int, timeframe: str = "w") -> list[dict]:
+    """
+    timeframe: 'h' = last hour, 'd' = 24 h, 'w' = 7 days (default),
+               'm' = 30 days, 'y' = past year   — Google tbs=qdr: codes
+    """
     params = {
-        "engine":"google_news","q":query,"num":n,
-        "hl":"en","gl":"us","api_key":SERPAPI_API_KEY
+        "engine": "google_news",
+        "q": query,
+        "tbs": f"qdr:{timeframe}",
+        "num": n,
+        "hl": "en",
+        "gl": "us",
+        "api_key": SERPAPI_API_KEY,
     }
-    return [
-        r for r in GoogleSearch(params).get_dict().get("news_results", [])
-        if r.get("link")
-    ][:n]
+    news = GoogleSearch(params).get_dict().get("news_results", [])
+    return [r for r in news if r.get("link")][:n]
 
 def is_accessible(url: str) -> bool:
     dom = ".".join(urlparse(url).netloc.split(".")[-2:])
@@ -158,7 +163,6 @@ def article_text(url: str) -> str | None:
         for p in BeautifulSoup(html,"html.parser").find_all("p")
     )
 
-# ───────────────────────────── News pipeline ────────────────────────────── #
 def industry_of(ticker: str) -> str:
     return gpt(f"For ticker '{ticker}', respond ONLY with its primary industry sector.", 12)
 
@@ -169,30 +173,53 @@ def synthesize(bullets: list[str], key: str, max_tok: int) -> str:
     joined = "\n".join(f"- {b}" for b in bullets)
     return gpt(f"{PROMPTS[key]}\n{joined}", max_tok)
 
-def news_summary(ticker: str, kind: str) -> str:
-    header_start = time.perf_counter()
-    ind = industry_of(ticker) if kind=="market" else None
-    query = f"{ind} industry" if kind=="market" else ticker
-    log(f"[news] fetching {COUNTS[kind]} articles for “{query}” …")
+def news_summary(ticker: str,
+                 scope: str,
+                 num_results: int = 15,
+                 timeframe: str = "w",
+                 keyword: str | None = None):
 
-    articles = google_news(query, COUNTS[kind])
+    query = f"{ticker} {scope}"
+    if keyword:
+        query += f" {keyword}"
+
+    # 1⃣  pull the headlines --------------------------------------------------
+    params = {
+        "engine": "google",
+        "tbm": "nws",
+        "q": query,
+        "tbs": f"qdr:{timeframe}",
+        "num": num_results,
+        "api_key": SERPAPI_API_KEY,
+    }
+    raw_articles = GoogleSearch(params).get_dict().get("news_results", [])
+    links = [a["link"] for a in raw_articles if a.get("link")]
+
+    # 2⃣  keep only accessible, non‑paywalled URLs ---------------------------
+    good_links = [u for u in links if is_accessible(u)]
+
+    # 3⃣  make a blurb for each article --------------------------------------
+    key = "market_blurb" if scope == "market" else "company_blurb"
     blurbs = []
-    for art in articles:
-        url=art["link"]
-        if not is_accessible(url): continue
-        txt=article_text(url)
-        if txt and len(txt)>300:
-            blurbs.append(make_blurb(txt, f"{kind}_blurb"))
+    for url in good_links:
+        txt = article_text(url) or ""
+        if txt:
+            blurbs.append(make_blurb(txt[:6_000], key))   # trim very long pieces
 
-    header = f"Market summary for {ind}" if kind=="market" else f"{ticker} company summary"
     if not blurbs:
-        return f"**{header}**\nNo accessible news."
+        return f"**{scope.title()} news for {ticker}**\nNo accessible articles."
 
-    summary = synthesize(blurbs, f"{kind}_synth", TOKENS["synth"])
-    log(f"[news] ✔ {kind} summary ready ({time.perf_counter()-header_start:.1f}s)")
-    return f"**{header}**\n{summary}"
+    # 4⃣  synthesize + format -------------------------------------------------
+    syn_key = "market_synth" if scope == "market" else "company_synth"
+    overview = synthesize(blurbs, syn_key, TOKENS["synth"])
 
-# ───────────────────────── Reddit pipeline (with logs) ───────────────────── #
+    markdown_summary = (
+        f"### {scope.title()} news for **{ticker}**\n"
+        f"{overview}\n\n"
+        + "\n".join(f"- {b}" for b in blurbs)
+    )
+    return markdown_summary
+
 def reddit_terms(company: str, industry: str) -> list[str]:
     log(f"[reddit] generating search tokens …")
     raw = gpt(
@@ -231,9 +258,10 @@ def token_sentiment(posts: list[dict], token: str) -> str | None:
     if not posts:
         log(f"[reddit]   • no posts for “{token}” – skipping")
         return None
+    t0 = time.perf_counter()
     bullets = [f"{p['title']} {p['selftext']} {p['comments']}" for p in posts]
-    log(f"[reddit] summarising token “{token}” …")
     out = synthesize(bullets, "reddit_token_synth", TOKENS["reddit_token"])
+    log(f"[reddit]   ✔ summarised “{token}” ({time.perf_counter()-t0:.1f}s)")
     return out
 
 def reddit_summary(ticker: str) -> str:
@@ -256,11 +284,10 @@ def reddit_summary(ticker: str) -> str:
     log(f"[reddit] ✔ reddit summary ready ({time.perf_counter()-start:.1f}s)")
     return f"**Reddit sentiment for {ticker}**\n{overall}"
 
-# ───────────────────────────── CLI entrypoint ───────────────────────────── #
 if __name__ == "__main__":
     if "--install" in sys.argv:
         install_requirements()
-        
+
     if len(sys.argv) < 2:
         sys.exit("Usage: python invest_agent.py <TICKER> [news|reddit|market|company|both]")
 
@@ -278,7 +305,6 @@ if __name__ == "__main__":
     if mode in ("reddit","both"):
         print(reddit_summary(ticker))
 
-    # ── cost report
     cost = TOKENS_USED["in"]*INPUT_COST + TOKENS_USED["out"]*OUTPUT_COST
     log(f"[cost] prompt={TOKENS_USED['in']}  completion={TOKENS_USED['out']}  →  ${cost:.4f}")
     log(f"[done] total runtime {time.perf_counter()-t0:.1f}s")
