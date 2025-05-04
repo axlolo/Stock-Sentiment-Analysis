@@ -1,0 +1,7 @@
+openai
+python-dotenv
+praw
+yfinance
+beautifulsoup4
+requests
+serpapi
