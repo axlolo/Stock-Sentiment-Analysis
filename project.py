@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# invest_agent.py  –  Google‑News + Reddit sentiment, GPT‑4.1‑nano
-
 import os, sys, json, time, requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -183,7 +180,6 @@ def news_summary(ticker: str,
     if keyword:
         query += f" {keyword}"
 
-    # 1⃣  pull the headlines --------------------------------------------------
     params = {
         "engine": "google",
         "tbm": "nws",
@@ -195,21 +191,18 @@ def news_summary(ticker: str,
     raw_articles = GoogleSearch(params).get_dict().get("news_results", [])
     links = [a["link"] for a in raw_articles if a.get("link")]
 
-    # 2⃣  keep only accessible, non‑paywalled URLs ---------------------------
     good_links = [u for u in links if is_accessible(u)]
 
-    # 3⃣  make a blurb for each article --------------------------------------
     key = "market_blurb" if scope == "market" else "company_blurb"
     blurbs = []
     for url in good_links:
         txt = article_text(url) or ""
         if txt:
-            blurbs.append(make_blurb(txt[:6_000], key))   # trim very long pieces
+            blurbs.append(make_blurb(txt[:6_000], key))
 
     if not blurbs:
         return f"**{scope.title()} news for {ticker}**\nNo accessible articles."
 
-    # 4⃣  synthesize + format -------------------------------------------------
     syn_key = "market_synth" if scope == "market" else "company_synth"
     overview = synthesize(blurbs, syn_key, TOKENS["synth"])
 

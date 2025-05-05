@@ -12,7 +12,6 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from project import news_summary, reddit_summary
 
-# --------------- PAGE & GLOBAL CSS ----------------
 st.set_page_config(page_title="Invest Agent", layout="wide")
 st.markdown("""
 <style>
@@ -27,7 +26,6 @@ function toggleSidebar(){ document.body.classList.toggle('sidebar-closed'); }
 </script>
 """, unsafe_allow_html=True)
 
-# -------- HEADER (logo + burger) ----------
 h1,h2=st.columns([0.08,0.92])
 with h1:
     st.image("logo.png", width=60)
@@ -35,7 +33,6 @@ with h1:
 with h2:
     st.markdown("<h2 style='margin:0 0 .2rem 0;'>Invest Agent Dashboard</h2>",unsafe_allow_html=True)
 
-# ---------- SIDEBAR nav ----------
 with st.sidebar:
     st.title("Menu")
     if st.button("🏠 Main Dashboard"):   st.session_state.page="main"
@@ -43,7 +40,6 @@ with st.sidebar:
 
 if "page" not in st.session_state: st.session_state.page="main"
 
-# -------- Resolver ----------
 @st.cache_data(ttl=3600)
 def to_ticker(q:str)->str|None:
     q=q.strip().upper()
@@ -57,7 +53,6 @@ def to_ticker(q:str)->str|None:
         sym=yf.Ticker(q).info.get("symbol"); return sym.upper() if sym else None
     except: return None
 
-# -------- Chart helper ----------
 def chart(df:pd.DataFrame,ticker:str,show_sma,show_bb,show_rsi):
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.7,0.3],vertical_spacing=0.04,
                       specs=[[{"secondary_y":True}],[{}]])
@@ -85,13 +80,11 @@ def chart(df:pd.DataFrame,ticker:str,show_sma,show_bb,show_rsi):
                       xaxis_rangeslider_visible=False)
     st.plotly_chart(fig,use_container_width=True)
 
-# ================= MAIN PAGE =================
 if st.session_state.page=="main":
     q=st.text_input("🔍 Enter ticker or company","AAPL")
     ticker=to_ticker(q)
     if not ticker: st.error("No ticker found."); st.stop()
 
-    # ----- chart controls -----
     st.subheader("Chart Settings")
     colp,coli=st.columns(2)
     period=colp.selectbox("Period",["1d","5d","1mo","3mo","6mo","1y","2y","5y","max"],index=5)
@@ -118,7 +111,6 @@ if st.session_state.page=="main":
         c4.markdown(news_summary(ticker,"company"))
         c4.markdown(reddit_summary(ticker))
 
-# ================= ADVANCED SENTIMENT =================
 elif st.session_state.page == "adv":
     st.subheader("Advanced Sentiment")
 
@@ -129,7 +121,6 @@ elif st.session_state.page == "adv":
                           ["Industry News", "Company News", "Reddit Sentiment"])
     n_results = st.number_input("# of results", 5, 50, 15)
 
-    # Time‑frame dropdown
     win_label = st.selectbox("Time window",
                              ["Past hour", "Past day", "Past week",
                               "Past month", "Past year"], index=2)
